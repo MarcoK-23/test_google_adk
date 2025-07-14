@@ -1,207 +1,104 @@
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
-from typing import Dict, Any, Optional
-import json
 import logging
 from datetime import datetime
 
-# Configure logging
+# Configure logging for debugging and monitoring
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(
-    title="Support Squad Backend",
-    description="FastAPI backend for Chatwoot integration with Google ADK",
-    version="1.0.0"
-)
+# Initialize FastAPI app
+app = FastAPI()
 
-# Pydantic models for request/response validation
-class ChatwootMessage(BaseModel):
-    message: str
-    conversation_id: Optional[str] = None
-    sender_id: Optional[str] = None
-    account_id: Optional[str] = None
-
-class ADKResponse(BaseModel):
-    response: str
-    conversation_id: Optional[str] = None
-    timestamp: str
-
-# Mock Google ADK integration
-class MockGoogleADK:
-    def __init__(self):
-        self.conversation_history = {}
-    
-    def process_message(self, message: str, conversation_id: str = None) -> str:
-        """
-        Mock implementation of Google ADK processing.
-        In production, this would integrate with actual Google ADK APIs.
-        """
-        logger.info(f"Processing message: {message}")
-        
-        # Simple mock responses based on message content
-        if "hello" in message.lower():
-            response = "Hello! I'm your AI assistant. How can I help you today?"
-        elif "help" in message.lower():
-            response = "I'm here to help! You can ask me questions about our services, get support, or just chat with me."
-        elif "support" in message.lower():
-            response = "For technical support, please provide more details about your issue. I'll do my best to assist you."
-        elif "bye" in message.lower() or "goodbye" in message.lower():
-            response = "Goodbye! Feel free to reach out if you need help again."
-        else:
-            response = "I understand you said: " + message + ". How can I assist you further?"
-        
-        # Store conversation history (in production, this would be in a database)
-        if conversation_id:
-            if conversation_id not in self.conversation_history:
-                self.conversation_history[conversation_id] = []
-            self.conversation_history[conversation_id].append({
-                "user_message": message,
-                "ai_response": response,
-                "timestamp": datetime.now().isoformat()
-            })
-        
-        return response
-
-# Initialize mock ADK
-mock_adk = MockGoogleADK()
-
+# Health check endpoint (root)
 @app.get("/")
 async def root():
-    """Health check endpoint"""
-    return {"message": "Support Squad Backend is running!", "status": "healthy"}
+    # Simple root endpoint to verify the service is running
+    return {"message": "De request is gelukt gefeliciteerd", "status": "healthy"}
 
+# Health check endpoint for monitoring
 @app.get("/health")
 async def health_check():
-    """Health check endpoint for monitoring"""
+    # Returns detailed health status and timestamp
     return {
+        "message": "De request is gelukt gefeliciteerd",
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
         "service": "support-squad-backend"
     }
 
+# Simple health check endpoint for container health checks
+@app.get("/healthz")
+async def health_check_simple():
+    # Used by Docker/Cloud Run for quick health checks
+    return {"message": "De request is gelukt gefeliciteerd", "status": "ok"}
+
+# Main webhook endpoint for Chatwoot AI reply suggestions
 @app.post("/chatwoot/webhook")
 async def chatwoot_webhook(request: Request):
-    """
-    Webhook endpoint to receive messages from Chatwoot.
-    This endpoint handles the integration between Chatwoot and Google ADK.
-    """
     try:
-        # Get the raw body
+        # Log the raw request body for debugging
         body = await request.body()
         logger.info(f"Received webhook from Chatwoot: {body}")
-        
-        # Parse the JSON payload
+        # Parse the incoming JSON or form payload
         try:
             payload = await request.json()
         except:
-            # If JSON parsing fails, try to parse as form data
             form_data = await request.form()
             payload = dict(form_data)
-        
         logger.info(f"Parsed payload: {payload}")
-        
-        # Extract message from Chatwoot payload
-        # Chatwoot webhook format may vary, so we handle different possible structures
+        # Extract the user message from various possible payload formats
         message = None
         conversation_id = None
-        sender_id = None
-        account_id = None
-        
-        # Try different possible payload structures
         if isinstance(payload, dict):
-            # Direct message field
-            if "message" in payload:
+            # Handle OpenAI/Chatwoot GPT-style payload
+            if "messages" in payload and isinstance(payload["messages"], list):
+                messages = payload["messages"]
+                for msg in reversed(messages):
+                    if msg.get("role") == "user":
+                        message = msg.get("content", "")
+                        break
+                # Generate a fallback conversation ID if not present
+                conversation_id = conversation_id or f"gpt-conv-{int(datetime.now().timestamp())}"
+            # Handle simple message field
+            elif "message" in payload:
                 message = payload["message"]
-            
-            # Nested message structure
+            # Handle nested content field
             elif "content" in payload:
                 message = payload["content"]
-            
-            # Chatwoot specific structure
+            # Handle Chatwoot's own conversation structure
             elif "conversation" in payload and "messages" in payload["conversation"]:
                 messages = payload["conversation"]["messages"]
                 if messages and len(messages) > 0:
                     message = messages[-1].get("content", "")
                     conversation_id = payload["conversation"].get("id")
-                    sender_id = messages[-1].get("sender_id")
-                    account_id = payload["conversation"].get("account_id")
-            
-            # Extract other fields
+            # Fallback: try to get conversation_id from top-level
             conversation_id = conversation_id or payload.get("conversation_id")
-            sender_id = sender_id or payload.get("sender_id")
-            account_id = account_id or payload.get("account_id")
-        
+        # If no message is found, return a 400 error
         if not message:
+            logger.error(f"No message found in payload. Payload structure: {payload}")
             raise HTTPException(status_code=400, detail="No message found in payload")
-        
-        logger.info(f"Processing message: {message} for conversation: {conversation_id}")
-        
-        # Process message through Google ADK (mock implementation)
-        adk_response = mock_adk.process_message(message, conversation_id)
-        
-        # Prepare response for Chatwoot
+        logger.info(f"Extracted message: '{message}' from conversation: {conversation_id}")
+        # Always return the static AI reply in the format Chatwoot expects
         response_data = {
-            "response": adk_response,
-            "conversation_id": conversation_id,
-            "timestamp": datetime.now().isoformat(),
-            "status": "success"
+            "choices": [
+                {
+                    "message": {
+                        "content": "Hallo de request is gelukt gefeliciteerd"
+                    }
+                }
+            ]
         }
-        
         logger.info(f"Sending response: {response_data}")
-        
         return JSONResponse(content=response_data, status_code=200)
-        
     except Exception as e:
+        # Log any errors and return a 500 error to Chatwoot
         logger.error(f"Error processing webhook: {str(e)}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
-@app.post("/chat/message")
-async def process_chat_message(chat_message: ChatwootMessage):
-    """
-    Direct message processing endpoint for testing.
-    This endpoint can be used for direct API calls without webhook complexity.
-    """
-    try:
-        logger.info(f"Processing direct message: {chat_message.message}")
-        
-        # Process message through Google ADK
-        adk_response = mock_adk.process_message(
-            chat_message.message, 
-            chat_message.conversation_id
-        )
-        
-        response = ADKResponse(
-            response=adk_response,
-            conversation_id=chat_message.conversation_id,
-            timestamp=datetime.now().isoformat()
-        )
-        
-        return response
-        
-    except Exception as e:
-        logger.error(f"Error processing message: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
-
-@app.get("/conversations/{conversation_id}/history")
-async def get_conversation_history(conversation_id: str):
-    """
-    Get conversation history for a specific conversation ID.
-    Useful for debugging and testing.
-    """
-    if conversation_id in mock_adk.conversation_history:
-        return {
-            "conversation_id": conversation_id,
-            "history": mock_adk.conversation_history[conversation_id]
-        }
-    else:
-        return {
-            "conversation_id": conversation_id,
-            "history": [],
-            "message": "No conversation history found"
-        }
-
+# For local development/testing: run with `python main.py`
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000) 
